@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Circle Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background-color: #121212;
+            color: white;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        .circle {
+            position: absolute;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform 0.1s;
+            animation: pulse 0.5s infinite alternate;
+        }
+        @keyframes pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.05); }
+        }
+        .circle:active {
+            transform: scale(0.9);
+        }
+        .non-scoring {
+            border: 2px dashed rgba(255,255,255,0.5);
+            opacity: 0.6;
+        }
+        .score-board {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 100;
+            font-size: 1.2em;
+        }
+        .timer {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 100;
+            font-size: 1.2em;
+        }
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+            z-index: 100;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #leaderboard {
+            position: fixed;
+            top: 80px;
+            left: 20px;
+            background-color: rgba(0, 0, 0, 0.9);
+            padding: 15px;
+            border-radius: 5px;
+            z-index: 100;
+            max-height: 300px;
+            overflow-y: auto;
+            width: 250px;
+            border: 2px solid #4CAF50;
+        }
+        .leaderboard-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #333;
+        }
+        .leaderboard-header {
+            font-weight: bold;
+            margin-bottom: 10px;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 5px;
+            font-size: 1.1em;
+        }
+        .current-player {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    
+    <div class="score-board">
+        Score: <span id="score">0</span>
+    </div>
+    
+    <div class="timer">
+        Time: <span id="time">90</span>s
+    </div>
+    
+    <div id="leaderboard" style="display: none;">
+        <div class="leaderboard-header">Group Leaderboard</div>
+        <div id="leaderboard-content"></div>
+    </div>
+    
+    <div class="controls">
+        <button id="leaderboard-btn">Show Leaderboard</button>
+        <button id="sound-btn">Sound: ON</button>
+    </div>
+    
+    <audio id="click-sound" src="{{ url_for('static', filename='sounds/click.mp3') }}" preload="auto"></audio>
+    <audio id="bg-music" loop>
+        <source src="{{ url_for('static', filename='sounds/background.mp3') }}" type="audio/mpeg">
+    </audio>
+    <audio id="countdown-sound" src="{{ url_for('static', filename='sounds/countdown.mp3') }}" preload="auto"></audio>
+    <audio id="gameover-sound" src="{{ url_for('static', filename='sounds/gameover.mp3') }}" preload="auto"></audio>
+    
+    <script>
+        // Game configuration - all parameters in one place
+        const CONFIG = {
+            circle: {
+                minSize: 30,
+                maxSize: 80,
+                minDuration: 500,    // Minimum time circle stays (ms)
+                maxDuration: 700,    // Maximum time circle stays (ms)
+                minSpawnDelay: 80,   // Minimum time between circles (ms)
+                maxSpawnDelay: 200,  // Maximum time between circles (ms)
+                scoringChance: 0.8    // 80% chance to be scoring circle
+            },
+            game: {
+                duration: 90,        // Game duration in seconds
+                pointsPerClick: 10   // Points for each scoring circle
+            }
+        };
+
+        const playerId = "{{ player_id }}";
+        const playerName = "{{ player_name }}";
+        const groupId = "{{ group_id }}";
+        const playerNumber = "{{ player_number }}";
+        
+        let score = 0;
+        let timeLeft = CONFIG.game.duration;
+        let gameActive = true;
+        let soundOn = true;
+        let circles = [];
+        let leaderboardVisible = false;
+        let lastClickTime = 0;
+        
+        // DOM elements
+        const gameContainer = document.getElementById('game-container');
+        const scoreDisplay = document.getElementById('score');
+        const timeDisplay = document.getElementById('time');
+        const leaderboard = document.getElementById('leaderboard');
+        const leaderboardContent = document.getElementById('leaderboard-content');
+        const leaderboardBtn = document.getElementById('leaderboard-btn');
+        const soundBtn = document.getElementById('sound-btn');
+        const clickSound = document.getElementById('click-sound');
+        const bgMusic = document.getElementById('bg-music');
+        const countdownSound = document.getElementById('countdown-sound');
+        const gameoverSound = document.getElementById('gameover-sound');
+        
+        // Initialize game with countdown
+        function initGame() {
+            updateLeaderboard();
+            startCountdown();
+        }
+        
+        // 3-second countdown before game starts
+        function startCountdown() {
+            let count = 3;
+            const countdownElement = document.createElement('div');
+            countdownElement.style.position = 'fixed';
+            countdownElement.style.top = '50%';
+            countdownElement.style.left = '50%';
+            countdownElement.style.transform = 'translate(-50%, -50%)';
+            countdownElement.style.fontSize = '5em';
+            countdownElement.style.fontWeight = 'bold';
+            countdownElement.style.color = '#4CAF50';
+            countdownElement.style.zIndex = '1000';
+            countdownElement.textContent = count;
+            document.body.appendChild(countdownElement);
+            
+            if (soundOn) countdownSound.play();
+            
+            const timer = setInterval(() => {
+                count--;
+                countdownElement.textContent = count;
+                
+                if (count <= 0) {
+                    clearInterval(timer);
+                    document.body.removeChild(countdownElement);
+                    startGame();
+                }
+            }, 1000);
+        }
+        
+        // Start actual game
+        function startGame() {
+            updateLeaderboard();
+            startTimer();
+            spawnCircle();
+            if (soundOn) bgMusic.play();
+        }
+        
+        // Game timer
+        function startTimer() {
+            const timer = setInterval(() => {
+                timeLeft--;
+                timeDisplay.textContent = timeLeft;
+                
+                if (timeLeft <= 0) {
+                    clearInterval(timer);
+                    endGame();
+                }
+            }, 1000);
+        }
+        
+        // Circle spawning with ultra speed
+        function spawnCircle() {
+            if (!gameActive) return;
+            
+            const size = Math.random() * 
+                (CONFIG.circle.maxSize - CONFIG.circle.minSize) + 
+                CONFIG.circle.minSize;
+                
+            const x = Math.random() * (window.innerWidth - size);
+            const y = Math.random() * (window.innerHeight - size);
+            
+            const circle = document.createElement('div');
+            circle.className = 'circle';
+            circle.style.width = `${size}px`;
+            circle.style.height = `${size}px`;
+            circle.style.left = `${x}px`;
+            circle.style.top = `${y}px`;
+            
+            // Random vibrant color
+            const hue = Math.random() * 360;
+            circle.style.backgroundColor = `hsl(${hue}, 85%, 60%)`;
+            
+            // Determine if scoring circle
+            const isScoring = Math.random() < CONFIG.circle.scoringChance;
+            if (!isScoring) {
+                circle.classList.add('non-scoring');
+                circle.dataset.scoring = 'false';
+            } else {
+                circle.dataset.scoring = 'true';
+            }
+            
+            circle.addEventListener('click', handleCircleClick);
+            gameContainer.appendChild(circle);
+            circles.push(circle);
+            
+            // Remove circle after random duration (very fast)
+            const duration = Math.random() * 
+                (CONFIG.circle.maxDuration - CONFIG.circle.minDuration) + 
+                CONFIG.circle.minDuration;
+                
+            setTimeout(() => {
+                if (gameContainer.contains(circle)) {
+                    gameContainer.removeChild(circle);
+                    circles = circles.filter(c => c !== circle);
+                }
+            }, duration);
+            
+            // Spawn next circle at random interval (ultra fast)
+            const nextSpawn = Math.random() * 
+                (CONFIG.circle.maxSpawnDelay - CONFIG.circle.minSpawnDelay) + 
+                CONFIG.circle.minSpawnDelay;
+                
+            setTimeout(spawnCircle, nextSpawn);
+        }
+        
+        // Handle circle click with visual feedback
+        function handleCircleClick(e) {
+            if (!gameActive) return;
+            
+            const circle = e.target;
+            const isScoring = circle.dataset.scoring === 'true';
+            
+            if (isScoring) {
+                score += CONFIG.game.pointsPerClick;
+                scoreDisplay.textContent = score;
+                if (soundOn) {
+                    clickSound.currentTime = 0;
+                    clickSound.play();
+                }
+            }
+            
+            // Visual feedback
+            circle.style.transform = 'scale(1.2)';
+            setTimeout(() => {
+                if (gameContainer.contains(circle)) {
+                    gameContainer.removeChild(circle);
+                    circles = circles.filter(c => c !== circle);
+                }
+            }, 100);
+        }
+        
+        // End game and submit score
+        function endGame() {
+            gameActive = false;
+            
+            // Clear all circles
+            circles.forEach(circle => {
+                if (gameContainer.contains(circle)) {
+                    gameContainer.removeChild(circle);
+                }
+            });
+            circles = [];
+            
+            // Play game over sound
+            if (soundOn) {
+                bgMusic.pause();
+                gameoverSound.play();
+            }
+            
+            // Submit score
+            submitScore();
+            
+            // Show final score and redirect
+            setTimeout(() => {
+                alert(`Game Over!\nYour Score: ${score}\nYou will be redirected to the home page.`);
+                window.location.href = "/";
+            }, 2000);
+        }
+        
+        // Submit score to server
+        function submitScore() {
+            fetch('/submit_score', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `player_id=${playerId}&score=${score}`
+            });
+        }
+        
+        // Update leaderboard
+        function updateLeaderboard() {
+            fetch(`/get_leaderboard/${groupId}`)
+                .then(response => response.json())
+                .then(data => {
+                    leaderboardContent.innerHTML = '';
+                    
+                    if (data.length === 0) {
+                        leaderboardContent.innerHTML = '<div>No scores yet</div>';
+                        return;
+                    }
+                    
+                    data.forEach((player, index) => {
+                        const item = document.createElement('div');
+                        item.className = `leaderboard-item ${player.name === playerName ? 'current-player' : ''}`;
+                        item.innerHTML = `
+                            <span>${index + 1}. ${player.name} (${player.player_number})</span>
+                            <span>${player.score}</span>
+                        `;
+                        leaderboardContent.appendChild(item);
+                    });
+                });
+        }
+        
+        // Toggle leaderboard visibility
+        leaderboardBtn.addEventListener('click', () => {
+            leaderboardVisible = !leaderboardVisible;
+            leaderboard.style.display = leaderboardVisible ? 'block' : 'none';
+            leaderboardBtn.textContent = leaderboardVisible ? 'Hide Leaderboard' : 'Show Leaderboard';
+            
+            if (leaderboardVisible) {
+                updateLeaderboard();
+            }
+        });
+        
+        // Toggle sound
+        soundBtn.addEventListener('click', () => {
+            soundOn = !soundOn;
+            soundBtn.textContent = `Sound: ${soundOn ? 'ON' : 'OFF'}`;
+            if (soundOn) {
+                bgMusic.play();
+            } else {
+                bgMusic.pause();
+            }
+        });
+        
+        // Start game when page loads
+        window.addEventListener('load', initGame);
+        
+        // Prevent going back
+        window.addEventListener('popstate', () => {
+            window.location.href = "/";
+        });
+        history.pushState(null, null, window.location.href);
+    </script>
+</body>
+</html>
